@@ -12,6 +12,12 @@ from app.models.users import User
 from app.models.delivery import Delivery
 from app.helpers.enums import UserRole, DeliveryStatus, DeliveryPartnerStatus
 from app.helpers.email_service import EmailService
+from app.helpers.validators import (
+    DeliveryPartnerValidator, 
+    handle_validation_error, 
+    validate_json_body,
+    ValidationException
+)
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 import os
@@ -34,17 +40,20 @@ logger = logging.getLogger(__name__)
 @method_decorator(csrf_exempt, name="dispatch")
 class DeliveryPartnerLoginController(View):
 
+    @handle_validation_error
     def post(self, request):
         try:
-            body = json.loads(request.body)
+            body = validate_json_body(request)
+            validated_data = DeliveryPartnerValidator.validate_login_data(body)
+            
             session = SessionLocal()
 
-            user = session.query(User).filter(User.email == body.get("email")).first()
+            user = session.query(User).filter(User.email == validated_data["email"]).first()
             if not user:
                 session.close()
                 return JsonResponse({"error": "Invalid credentials"}, status=401)
 
-            if not check_password(body.get("password"), user.password_hash):
+            if not check_password(validated_data["password"], user.password_hash):
                 session.close()
                 return JsonResponse({"error": "Invalid credentials"}, status=401)
 
@@ -128,6 +137,7 @@ class DeliveryPartnerProfileController(View):
             logger.exception(e)
             return JsonResponse({"error": "Internal server error"}, status=500)
 
+    @handle_validation_error
     def put(self, request, partner_id):
         try:
             session = SessionLocal()
@@ -141,16 +151,12 @@ class DeliveryPartnerProfileController(View):
                 session.close()
                 return JsonResponse({"error": "Delivery partner not found"}, status=404)
 
-            body = json.loads(request.body)
+            body = validate_json_body(request)
+            validated_data = DeliveryPartnerValidator.validate_profile_update(body)
 
-            # Update allowed fields
-            updatable_fields = [
-                "phone_number", "vehicle_type", "vehicle_number"
-            ]
-            
-            for field in updatable_fields:
-                if field in body:
-                    setattr(partner, field, body[field])
+            # Update validated fields
+            for field, value in validated_data.items():
+                setattr(partner, field, value)
             
             partner.updated_at = datetime.utcnow()
             session.commit()
@@ -235,12 +241,15 @@ class DeliveryPartnerDeliveryController(View):
             logger.exception(e)
             return JsonResponse({"error": "Internal server error"}, status=500)
 
+    @handle_validation_error
     def put(self, request, partner_id, delivery_id):
         """
         Update delivery status (PICKED_UP, DELIVERED, etc.)
         """
         try:
-            body = json.loads(request.body)
+            body = validate_json_body(request)
+            validated_data = DeliveryPartnerValidator.validate_delivery_status_update(body)
+            
             session = SessionLocal()
 
             # Verify partner exists
@@ -263,16 +272,7 @@ class DeliveryPartnerDeliveryController(View):
                 session.close()
                 return JsonResponse({"error": "Delivery not found or not assigned to you"}, status=404)
 
-            new_status = body.get("status")
-            if not new_status:
-                session.close()
-                return JsonResponse({"error": "status is required"}, status=400)
-
-            # Validate status
-            valid_statuses = [DeliveryStatus.ASSIGNED, DeliveryStatus.PICKED_UP, DeliveryStatus.DELIVERED]
-            if new_status not in valid_statuses:
-                session.close()
-                return JsonResponse({"error": f"Invalid status. Must be one of: {', '.join(valid_statuses)}"}, status=400)
+            new_status = validated_data["status"]
 
             # Update delivery status and timestamps
             old_status = delivery.status
@@ -319,9 +319,12 @@ class DeliveryPartnerAvailabilityController(View):
     Delivery partner can update their availability status
     """
 
+    @handle_validation_error
     def put(self, request, partner_id):
         try:
-            body = json.loads(request.body)
+            body = validate_json_body(request)
+            validated_data = DeliveryPartnerValidator.validate_availability_update(body)
+            
             session = SessionLocal()
 
             partner = session.query(User).filter(
@@ -335,10 +338,8 @@ class DeliveryPartnerAvailabilityController(View):
 
             # For now, we'll use is_active as availability status
             # In a real implementation, you might want to add a separate availability field
-            is_available = body.get("is_available")
-            if is_available is not None:
-                partner.is_active = bool(is_available)
-                partner.updated_at = datetime.utcnow()
+            partner.is_active = validated_data["is_available"]
+            partner.updated_at = datetime.utcnow()
 
             session.commit()
             session.close()

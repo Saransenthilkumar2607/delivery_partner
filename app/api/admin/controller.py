@@ -12,6 +12,12 @@ from app.models.users import User
 from app.models.delivery import Delivery
 from app.helpers.enums import UserRole, DeliveryStatus
 from app.helpers.email_service import EmailService
+from app.helpers.validators import (
+    DeliveryValidator,
+    handle_validation_error, 
+    validate_json_body,
+    ValidationException
+)
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 import os
@@ -34,9 +40,10 @@ logger = logging.getLogger(__name__)
 @method_decorator(csrf_exempt, name="dispatch")
 class AdminLoginController(View):
 
+    @handle_validation_error
     def post(self, request):
         try:
-            body = json.loads(request.body)
+            body = validate_json_body(request)
             session = SessionLocal()
 
             user = session.query(User).filter(User.email == body.get("email")).first()
@@ -215,12 +222,13 @@ class AdminDeliveryController(View):
             logger.exception(e)
             return JsonResponse({"error": "Internal server error"}, status=500)
 
+    @handle_validation_error
     def put(self, request, delivery_id):
         """
         Assign delivery partner to a delivery
         """
         try:
-            body = json.loads(request.body)
+            body = validate_json_body(request)
             session = SessionLocal()
 
             delivery = session.query(Delivery).filter(Delivery.id == delivery_id).first()
@@ -232,6 +240,11 @@ class AdminDeliveryController(View):
             if not delivery_partner_id:
                 session.close()
                 return JsonResponse({"error": "delivery_partner_id is required"}, status=400)
+            
+            # Validate delivery_partner_id is a positive integer
+            if not isinstance(delivery_partner_id, int) or delivery_partner_id <= 0:
+                session.close()
+                return JsonResponse({"error": "Invalid delivery_partner_id"}, status=400)
 
             # Verify delivery partner exists and is verified
             delivery_partner = session.query(User).filter(
@@ -346,12 +359,13 @@ class AdminDeliveryPartnerController(View):
             logger.exception(e)
             return JsonResponse({"error": "Internal server error"}, status=500)
 
+    @handle_validation_error
     def put(self, request, partner_id):
         """
         Verify or unverify a delivery partner
         """
         try:
-            body = json.loads(request.body)
+            body = validate_json_body(request)
             session = SessionLocal()
             
             partner = session.query(User).filter(
@@ -363,8 +377,17 @@ class AdminDeliveryPartnerController(View):
                 session.close()
                 return JsonResponse({"error": "Delivery partner not found"}, status=404)
             
+            # Validate is_verified field
+            is_verified = body.get("is_verified")
+            if is_verified is None:
+                session.close()
+                return JsonResponse({"error": "is_verified field is required"}, status=400)
+            
+            if not isinstance(is_verified, bool):
+                session.close()
+                return JsonResponse({"error": "is_verified must be a boolean value"}, status=400)
+            
             # Update verification status
-            is_verified = body.get("is_verified", True)
             partner.is_verified = is_verified
             partner.updated_at = datetime.utcnow()
             
