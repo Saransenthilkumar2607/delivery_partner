@@ -50,31 +50,13 @@ ROOT_URLCONF = 'app.urls'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'delivery_partner',
-        'USER': 'root',
-        'PASSWORD': '12345678',
-        'HOST': 'localhost',
-        'PORT': '3306',
+        'NAME': 'delivery_partner',  # Force correct database name
+        'USER': os.getenv('DB_USER'),
+        'PASSWORD': os.getenv('DB_PASSWORD'),
+        'HOST': os.getenv('DB_HOST'),
+        'PORT': os.getenv('DB_PORT'),
     }
 }
-
-# Alternative: Use DATABASE_URL from environment
-DATABASE_URL = os.getenv('DATABASE_URL')
-if DATABASE_URL:
-    # Parse DATABASE_URL and update DATABASES
-    if DATABASE_URL.startswith('mysql://'):
-        # Simple parsing for mysql://user:password@host:port/database
-        import re
-        match = re.match(r'mysql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)', DATABASE_URL)
-        if match:
-            DATABASES['default'] = {
-                'ENGINE': 'django.db.backends.mysql',
-                'NAME': match.group(5),
-                'USER': match.group(1),
-                'PASSWORD': match.group(2),
-                'HOST': match.group(3),
-                'PORT': match.group(4),
-            }
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
@@ -130,16 +112,34 @@ REST_FRAMEWORK = {
 }
 
 # Email Configuration
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
 EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'True').lower() == 'true'
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
-DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER)
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER or 'noreply@deliverypartner.com')
 
-# Admin email for notifications
-ADMIN_EMAIL = os.getenv('ADMIN_EMAIL', 'admin@deliverypartner.com')
+# Redis Configuration
+REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+REDIS_CACHE_TIMEOUT = int(os.getenv('REDIS_CACHE_TIMEOUT', '3600'))  # 1 hour default
+
+# Cache Configuration
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': REDIS_URL,
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+        },
+        'KEY_PREFIX': 'delivery_partner_',
+        'TIMEOUT': REDIS_CACHE_TIMEOUT,
+    }
+}
+
+# Session Configuration
+SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
+SESSION_CACHE_ALIAS = 'default'
 
 # CORS
 CORS_ALLOW_ALL_ORIGINS = True

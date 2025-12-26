@@ -23,3 +23,16 @@ class VehicleType:
     CAR = "CAR"
     VAN = "VAN"
     TRUCK = "TRUCK"
+
+class PaymentStatus:
+    PENDING = "PENDING"
+    PROCESSING = "PROCESSING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    REFUNDED = "REFUNDED"
+    CANCELLED = "CANCELLED"
+
+class PaymentMethod:
+    RAZORPAY = "RAZORPAY"
+    CASH_ON_DELIVERY = "CASH_ON_DELIVERY"
+    UPI = "UPI"

@@ -1,44 +1,47 @@
-from sqlalchemy import Column, String, Boolean, Text, Integer, Float, Enum, DateTime, ForeignKey, Numeric
-from sqlalchemy.orm import relationship
-
-from app.helpers.base_model import BaseModel
+from django.db import models
 from app.helpers.enums import UserRole, VehicleType
 
-class User(BaseModel):
-    __tablename__ = "users"
-    
+class User(models.Model):
     # Common fields
-    email = Column(String, unique=True, index=True, nullable=False)
-    name = Column(String(100), nullable=False)
-    password_hash = Column(String(255), nullable=False)
-    is_active = Column(Boolean, default=True)
-    role = Column(String(20), default=UserRole.END_USER)
-    phone_number = Column(String(20), nullable=True)
+    email = models.EmailField(unique=True)
+    name = models.CharField(max_length=100)
+    password_hash = models.CharField(max_length=255)
+    is_active = models.BooleanField(default=True)
+    role = models.CharField(max_length=20, default=UserRole.END_USER)
+    phone_number = models.CharField(max_length=20, blank=True, null=True)
     
     # Address fields for delivery (for END_USER role)
-    address_line_1 = Column(String(255), nullable=True)
-    address_line_2 = Column(String(255), nullable=True)
-    city = Column(String(100), nullable=True)
-    state = Column(String(100), nullable=True)
-    postal_code = Column(String(20), nullable=True)
-    country = Column(String(100), default="india")
-    delivery_notes = Column(Text, nullable=True)
+    address_line_1 = models.CharField(max_length=255, blank=True, null=True)
+    address_line_2 = models.CharField(max_length=255, blank=True, null=True)
+    city = models.CharField(max_length=100, blank=True, null=True)
+    state = models.CharField(max_length=100, blank=True, null=True)
+    postal_code = models.CharField(max_length=20, blank=True, null=True)
+    country = models.CharField(max_length=100, default="india")
+    delivery_notes = models.TextField(blank=True, null=True)
     
-    # Delivery Partner specific fields
-    license_number = Column(String(50), nullable=True)
-    vehicle_type = Column(String(20), nullable=True)
-    vehicle_number = Column(String(20), nullable=True)
-    is_verified = Column(Boolean, default=False)
-    rating = Column(Float, default=0.0)
-    total_deliveries = Column(Integer, default=0)
+    # Delivery partner specific fields
+    license_number = models.CharField(max_length=50, blank=True, null=True)
+    vehicle_type = models.CharField(max_length=20, blank=True, null=True)
+    vehicle_number = models.CharField(max_length=50, blank=True, null=True)
+    is_verified = models.BooleanField(default=False)
+    rating = models.FloatField(default=0.0)
+    total_deliveries = models.IntegerField(default=0)
     
     # Admin specific fields
-    department = Column(String(100), nullable=True)
+    department = models.CharField(max_length=100, blank=True, null=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'users'
+
+    def __str__(self):
+        return f"{self.name} ({self.email})"
     
     # Documents (stored in S3)
-    license_document = Column(String(500), nullable=True)
-    vehicle_document = Column(String(500), nullable=True)
-    profile_photo = Column(String(500), nullable=True)
-    
+    license_document = models.CharField(max_length=500, blank=True, null=True)
+    vehicle_document = models.CharField(max_length=500, blank=True, null=True)
+    profile_photo = models.CharField(max_length=500, blank=True, null=True)
     def __repr__(self):
         return self.email

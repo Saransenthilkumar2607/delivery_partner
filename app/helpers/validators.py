@@ -5,12 +5,15 @@ from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.http import JsonResponse
 
-from app.helpers.enums import UserRole, DeliveryStatus, VehicleType
+from app.helpers.enums import UserRole, DeliveryStatus, VehicleType, PaymentMethod
 
 
 class ValidationException(Exception):
     """Custom exception for validation errors"""
-    pass
+    
+    def __init__(self, errors):
+        self.errors = errors
+        super().__init__(errors)
 
 
 class DeliveryPartnerValidator:
@@ -215,6 +218,33 @@ class UserValidator:
     """Validator for User operations"""
     
     @staticmethod
+    def validate_login(data: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate login credentials"""
+        errors = {}
+        
+        # Email validation
+        email = data.get("email", "").strip()
+        if not email:
+            errors["email"] = "Email is required"
+        else:
+            try:
+                validate_email(email)
+            except ValidationError:
+                errors["email"] = "Invalid email format"
+        
+        # Password validation
+        password = data.get("password", "")
+        if not password:
+            errors["password"] = "Password is required"
+        elif len(password) < 6:
+            errors["password"] = "Password must be at least 6 characters long"
+        
+        if errors:
+            raise ValidationException(errors)
+        
+        return {"email": email.lower(), "password": password}
+    
+    @staticmethod
     def validate_user_creation(data: Dict[str, Any], role: str = UserRole.END_USER) -> Dict[str, Any]:
         """Validate user creation data"""
         errors = {}
@@ -309,10 +339,118 @@ class UserValidator:
             if postal_code and not re.match(r'^\d{6}$', postal_code):
                 errors["postal_code"] = "Invalid postal code format (must be 6 digits)"
         
+        elif role == UserRole.ADMIN:
+            # Department validation for admin users
+            department = data.get("department", "").strip()
+            if not department:
+                errors["department"] = "Department is required for admin users"
+            elif len(department) < 2:
+                errors["department"] = "Department must be at least 2 characters long"
+            else:
+                validated_data["department"] = department
+        
         if errors:
             raise ValidationException(errors)
         
         validated_data["role"] = role
+        return validated_data
+
+
+class PaymentValidator:
+    """Validator for Payment operations"""
+    
+    @staticmethod
+    def validate_payment_creation(data: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate payment creation data"""
+        errors = {}
+        validated_data = {}
+        
+        # Delivery ID validation
+        if "delivery_id" not in data:
+            errors["delivery_id"] = "Delivery ID is required"
+        elif not isinstance(data["delivery_id"], int) or data["delivery_id"] <= 0:
+            errors["delivery_id"] = "Invalid delivery ID"
+        else:
+            validated_data["delivery_id"] = data["delivery_id"]
+        
+        # Amount validation
+        if "amount" not in data:
+            errors["amount"] = "Amount is required"
+        else:
+            try:
+                amount = float(data["amount"])
+                if amount <= 0:
+                    errors["amount"] = "Amount must be greater than 0"
+                elif amount > 999999.99:
+                    errors["amount"] = "Amount is too high"
+                else:
+                    validated_data["amount"] = amount
+            except (ValueError, TypeError):
+                errors["amount"] = "Invalid amount format"
+        
+        # Payment method validation
+        payment_method = data.get("payment_method", "").strip().upper()
+        valid_methods = [PaymentMethod.RAZORPAY, PaymentMethod.CASH_ON_DELIVERY, PaymentMethod.UPI]
+        
+        if not payment_method:
+            errors["payment_method"] = "Payment method is required"
+        elif payment_method not in valid_methods:
+            errors["payment_method"] = f"Invalid payment method. Must be one of: {', '.join(valid_methods)}"
+        else:
+            validated_data["payment_method"] = payment_method
+        
+        if errors:
+            raise ValidationException(errors)
+        
+        return validated_data
+
+
+class RefundValidator:
+    """Validator for Refund operations"""
+    
+    @staticmethod
+    def validate_refund_creation(data: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate refund creation data"""
+        errors = {}
+        validated_data = {}
+        
+        # Payment ID validation
+        if "payment_id" not in data:
+            errors["payment_id"] = "Payment ID is required"
+        elif not isinstance(data["payment_id"], int) or data["payment_id"] <= 0:
+            errors["payment_id"] = "Invalid payment ID"
+        else:
+            validated_data["payment_id"] = data["payment_id"]
+        
+        # Refund amount validation
+        if "amount" not in data:
+            errors["amount"] = "Refund amount is required"
+        else:
+            try:
+                amount = float(data["amount"])
+                if amount <= 0:
+                    errors["amount"] = "Refund amount must be greater than 0"
+                elif amount > 999999.99:
+                    errors["amount"] = "Refund amount is too high"
+                else:
+                    validated_data["amount"] = amount
+            except (ValueError, TypeError):
+                errors["amount"] = "Invalid refund amount format"
+        
+        # Reason validation
+        reason = data.get("reason", "").strip()
+        if not reason:
+            errors["reason"] = "Refund reason is required"
+        elif len(reason) < 5:
+            errors["reason"] = "Refund reason must be at least 5 characters long"
+        elif len(reason) > 500:
+            errors["reason"] = "Refund reason must not exceed 500 characters"
+        else:
+            validated_data["reason"] = reason
+        
+        if errors:
+            raise ValidationException(errors)
+        
         return validated_data
 
 
@@ -322,11 +460,29 @@ def handle_validation_error(func):
         try:
             return func(*args, **kwargs)
         except ValidationException as e:
-            return JsonResponse({"errors": e.args[0]}, status=400)
-        except json.JSONDecodeError:
-            return JsonResponse({"error": "Invalid JSON format"}, status=400)
+            return JsonResponse({
+                "error": "Validation failed",
+                "errors": e.errors,
+                "message": "Please check the following fields and try again"
+            }, status=400)
+        except json.JSONDecodeError as e:
+            return JsonResponse({
+                "error": "Invalid JSON format",
+                "details": str(e),
+                "message": "Request body must be valid JSON"
+            }, status=400)
+        except ValueError as e:
+            return JsonResponse({
+                "error": "Value error",
+                "details": str(e),
+                "message": "Invalid input value"
+            }, status=400)
         except Exception as e:
-            return JsonResponse({"error": "Internal server error"}, status=500)
+            return JsonResponse({
+                "error": "Internal server error",
+                "details": str(e),
+                "message": "An unexpected error occurred"
+            }, status=500)
     return wrapper
 
 

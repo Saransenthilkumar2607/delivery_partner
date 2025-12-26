@@ -7,9 +7,13 @@ from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from django.contrib.auth.hashers import make_password, check_password
+from django.db import transaction
+from django.utils import timezone
 
 from app.models.users import User
 from app.models.delivery import Delivery
+from app.models.users import User
+
 from app.helpers.enums import UserRole, DeliveryStatus, DeliveryPartnerStatus
 from app.helpers.email_service import EmailService
 from app.helpers.validators import (
@@ -18,17 +22,8 @@ from app.helpers.validators import (
     validate_json_body,
     ValidationException
 )
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-import os
+from app.helpers.database import get_database_session
 from datetime import datetime
-
-# Create SQLAlchemy session
-DATABASE_URL = os.getenv('DATABASE_URL')
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL environment variable is not set")
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 logger = logging.getLogger(__name__)
 
@@ -42,35 +37,27 @@ class DeliveryPartnerLoginController(View):
 
     @handle_validation_error
     def post(self, request):
-        try:
-            body = validate_json_body(request)
-            validated_data = DeliveryPartnerValidator.validate_login_data(body)
-            
-            session = SessionLocal()
+        body = validate_json_body(request)
+        validated_data = DeliveryPartnerValidator.validate_login_data(body)
 
+        session = get_database_session()
+        try:
             user = session.query(User).filter(User.email == validated_data["email"]).first()
             if not user:
-                session.close()
                 return JsonResponse({"error": "Invalid credentials"}, status=401)
 
             if not check_password(validated_data["password"], user.password_hash):
-                session.close()
                 return JsonResponse({"error": "Invalid credentials"}, status=401)
 
             if not user.is_active:
-                session.close()
                 return JsonResponse({"error": "Account inactive"}, status=401)
 
-            if user.role != UserRole.DELIVERY_PARTNER:
-                session.close()
+            if user.role != "DELIVERY_PARTNER":
                 return JsonResponse({"error": "Access denied. Delivery partner role required."}, status=403)
-
-            token = str(uuid.uuid4())
-            session.close()
 
             return JsonResponse({
                 "message": "Delivery partner login successful",
-                "token": token,
+                "token": str(uuid.uuid4()),
                 "delivery_partner": {
                     "id": user.id,
                     "email": user.email,
@@ -84,10 +71,8 @@ class DeliveryPartnerLoginController(View):
                     "total_deliveries": user.total_deliveries
                 }
             })
-
-        except Exception as e:
-            logger.exception(e)
-            return JsonResponse({"error": "Internal server error"}, status=500)
+        finally:
+            session.close()
 
 
 # =====================================================
@@ -101,18 +86,16 @@ class DeliveryPartnerProfileController(View):
     """
 
     def get(self, request, partner_id):
+        session = get_database_session()
         try:
-            session = SessionLocal()
-            
             partner = session.query(User).filter(
                 User.id == partner_id,
-                User.role == UserRole.DELIVERY_PARTNER
+                User.role == "DELIVERY_PARTNER"
             ).first()
             
             if not partner:
-                session.close()
                 return JsonResponse({"error": "Delivery partner not found"}, status=404)
-
+            
             profile_data = {
                 "id": partner.id,
                 "email": partner.email,
@@ -130,27 +113,25 @@ class DeliveryPartnerProfileController(View):
                 "updated_at": partner.updated_at.isoformat() if partner.updated_at else None
             }
             
-            session.close()
             return JsonResponse(profile_data)
-
         except Exception as e:
             logger.exception(e)
             return JsonResponse({"error": "Internal server error"}, status=500)
+        finally:
+            session.close()
 
     @handle_validation_error
     def put(self, request, partner_id):
+        session = get_database_session()
         try:
-            session = SessionLocal()
-            
             partner = session.query(User).filter(
                 User.id == partner_id,
-                User.role == UserRole.DELIVERY_PARTNER
+                User.role == "DELIVERY_PARTNER"
             ).first()
             
             if not partner:
-                session.close()
                 return JsonResponse({"error": "Delivery partner not found"}, status=404)
-
+            
             body = validate_json_body(request)
             validated_data = DeliveryPartnerValidator.validate_profile_update(body)
 
@@ -158,15 +139,16 @@ class DeliveryPartnerProfileController(View):
             for field, value in validated_data.items():
                 setattr(partner, field, value)
             
-            partner.updated_at = datetime.utcnow()
             session.commit()
-            session.close()
+            session.refresh(partner)
 
             return JsonResponse({"message": "Profile updated successfully"})
-
         except Exception as e:
+            session.rollback()
             logger.exception(e)
             return JsonResponse({"error": "Internal server error"}, status=500)
+        finally:
+            session.close()
 
 
 # =====================================================
@@ -180,42 +162,40 @@ class DeliveryPartnerDeliveryController(View):
     """
 
     def get(self, request, partner_id):
+        session = get_database_session()
         try:
-            session = SessionLocal()
-            
             # Verify partner exists
             partner = session.query(User).filter(
                 User.id == partner_id,
-                User.role == UserRole.DELIVERY_PARTNER
+                User.role == "DELIVERY_PARTNER"
             ).first()
             
             if not partner:
-                session.close()
                 return JsonResponse({"error": "Delivery partner not found"}, status=404)
-
+            
             # Get deliveries assigned to this partner
             deliveries = session.query(Delivery).filter(
                 Delivery.delivery_partner_id == partner_id
             ).all()
 
             data = []
-            for d in deliveries:
-                # Get end user details
-                end_user = session.query(User).filter(User.id == d.end_user_id).first()
-
+            for delivery in deliveries:
+                # Get end user manually
+                end_user = session.query(User).filter(User.id == delivery.end_user_id).first() if delivery.end_user_id else None
+                
                 delivery_data = {
-                    "id": d.id,
-                    "tracking_number": d.tracking_number,
-                    "pickup_address": d.pickup_address,
-                    "delivery_address": d.delivery_address,
-                    "item_description": d.item_description,
-                    "status": d.status,
-                    "delivery_fee": float(d.delivery_fee) if d.delivery_fee else None,
-                    "pickup_notes": d.pickup_notes,
-                    "delivery_notes": d.delivery_notes,
-                    "created_at": d.created_at.isoformat() if d.created_at else None,
-                    "pickup_time": d.pickup_time.isoformat() if d.pickup_time else None,
-                    "delivery_time": d.delivery_time.isoformat() if d.delivery_time else None,
+                    "id": delivery.id,
+                    "tracking_number": delivery.tracking_number,
+                    "pickup_address": delivery.pickup_address,
+                    "delivery_address": delivery.delivery_address,
+                    "item_description": delivery.item_description,
+                    "status": delivery.status,
+                    "delivery_fee": float(delivery.delivery_fee) if delivery.delivery_fee else None,
+                    "pickup_notes": delivery.pickup_notes,
+                    "delivery_notes": delivery.delivery_notes,
+                    "created_at": delivery.created_at.isoformat() if delivery.created_at else None,
+                    "pickup_time": delivery.pickup_time.isoformat() if delivery.pickup_time else None,
+                    "delivery_time": delivery.delivery_time.isoformat() if delivery.delivery_time else None,
                     "end_user": {
                         "id": end_user.id,
                         "name": end_user.name,
@@ -223,8 +203,6 @@ class DeliveryPartnerDeliveryController(View):
                     } if end_user else None
                 }
                 data.append(delivery_data)
-            
-            session.close()
 
             return JsonResponse({
                 "deliveries": data,
@@ -236,30 +214,29 @@ class DeliveryPartnerDeliveryController(View):
                     "total_deliveries": partner.total_deliveries
                 }
             })
-
         except Exception as e:
             logger.exception(e)
             return JsonResponse({"error": "Internal server error"}, status=500)
+        finally:
+            session.close()
 
     @handle_validation_error
     def put(self, request, partner_id, delivery_id):
         """
         Update delivery status (PICKED_UP, DELIVERED, etc.)
         """
-        try:
-            body = validate_json_body(request)
-            validated_data = DeliveryPartnerValidator.validate_delivery_status_update(body)
-            
-            session = SessionLocal()
+        body = validate_json_body(request)
+        validated_data = DeliveryPartnerValidator.validate_delivery_status_update(body)
 
+        session = get_database_session()
+        try:
             # Verify partner exists
             partner = session.query(User).filter(
                 User.id == partner_id,
-                User.role == UserRole.DELIVERY_PARTNER
+                User.role == "DELIVERY_PARTNER"
             ).first()
             
             if not partner:
-                session.close()
                 return JsonResponse({"error": "Delivery partner not found"}, status=404)
 
             # Get delivery assigned to this partner
@@ -269,44 +246,71 @@ class DeliveryPartnerDeliveryController(View):
             ).first()
             
             if not delivery:
-                session.close()
                 return JsonResponse({"error": "Delivery not found or not assigned to you"}, status=404)
 
             new_status = validated_data["status"]
+            old_status = delivery.status
 
             # Update delivery status and timestamps
-            old_status = delivery.status
             delivery.status = new_status
-            delivery.updated_at = datetime.utcnow()
 
-            if new_status == DeliveryStatus.PICKED_UP and old_status != DeliveryStatus.PICKED_UP:
-                delivery.pickup_time = datetime.utcnow()
-            elif new_status == DeliveryStatus.DELIVERED and old_status != DeliveryStatus.DELIVERED:
-                delivery.delivery_time = datetime.utcnow()
+            if new_status == "PICKED_UP" and old_status != "PICKED_UP":
+                delivery.pickup_time = timezone.now()
+            elif new_status == "DELIVERED" and old_status != "DELIVERED":
+                delivery.delivery_time = timezone.now()
                 # Update partner's total deliveries
                 partner.total_deliveries += 1
 
             session.commit()
-            
-            # Prepare delivery data before closing session
-            delivery_data = {
-                "id": delivery.id,
-                "tracking_number": delivery.tracking_number,
-                "status": delivery.status,
-                "pickup_time": delivery.pickup_time.isoformat() if delivery.pickup_time else None,
-                "delivery_time": delivery.delivery_time.isoformat() if delivery.delivery_time else None
-            }
-            
-            session.close()
+            session.refresh(delivery)
+            session.refresh(partner)
+
+            # Get end user for email
+            end_user = session.query(User).filter(User.id == delivery.end_user_id).first()
+
+            # Send email notification to end user for status update
+            try:
+                EmailService.send_delivery_status_update({
+                    'tracking_number': delivery.tracking_number,
+                    'pickup_address': delivery.pickup_address,
+                    'delivery_address': delivery.delivery_address,
+                    'item_description': delivery.item_description,
+                    'updated_at': delivery.updated_at.isoformat() if delivery.updated_at else None,
+                }, end_user.email if end_user else 'N/A', new_status)
+            except Exception as e:
+                logger.error(f"Failed to send delivery status email: {str(e)}")
+
+            # If delivery is completed, send completion email
+            if new_status == "DELIVERED":
+                try:
+                    EmailService.send_delivery_completed_to_user({
+                        'tracking_number': delivery.tracking_number,
+                        'delivery_address': delivery.delivery_address,
+                        'item_description': delivery.item_description,
+                        'delivered_at': delivery.delivery_time.isoformat() if delivery.delivery_time else None,
+                        'customer_name': end_user.name if end_user else 'N/A',
+                        'customer_email': end_user.email if end_user else 'N/A',
+                        'partner_name': partner.name
+                    })
+                except Exception as e:
+                    logger.error(f"Failed to send delivery completion email: {str(e)}")
 
             return JsonResponse({
-                "message": f"Delivery status updated to {new_status}",
-                "delivery": delivery_data
+                "message": "Delivery status updated successfully",
+                "delivery": {
+                    "id": delivery.id,
+                    "tracking_number": delivery.tracking_number,
+                    "status": delivery.status,
+                    "pickup_time": delivery.pickup_time.isoformat() if delivery.pickup_time else None,
+                    "delivery_time": delivery.delivery_time.isoformat() if delivery.delivery_time else None
+                }
             })
-
         except Exception as e:
+            session.rollback()
             logger.exception(e)
             return JsonResponse({"error": "Internal server error"}, status=500)
+        finally:
+            session.close()
 
 
 # =====================================================
@@ -321,52 +325,46 @@ class DeliveryPartnerAvailabilityController(View):
 
     @handle_validation_error
     def put(self, request, partner_id):
+        session = get_database_session()
         try:
             body = validate_json_body(request)
             validated_data = DeliveryPartnerValidator.validate_availability_update(body)
-            
-            session = SessionLocal()
 
             partner = session.query(User).filter(
                 User.id == partner_id,
-                User.role == UserRole.DELIVERY_PARTNER
+                User.role == "DELIVERY_PARTNER"
             ).first()
             
             if not partner:
-                session.close()
                 return JsonResponse({"error": "Delivery partner not found"}, status=404)
 
             # For now, we'll use is_active as availability status
             # In a real implementation, you might want to add a separate availability field
             partner.is_active = validated_data["is_available"]
-            partner.updated_at = datetime.utcnow()
-
             session.commit()
-            session.close()
+            session.refresh(partner)
 
             return JsonResponse({
                 "message": "Availability updated successfully",
                 "is_available": partner.is_active
             })
-
         except Exception as e:
+            session.rollback()
             logger.exception(e)
             return JsonResponse({"error": "Internal server error"}, status=500)
+        finally:
+            session.close()
 
     def get(self, request, partner_id):
+        session = get_database_session()
         try:
-            session = SessionLocal()
-
             partner = session.query(User).filter(
                 User.id == partner_id,
-                User.role == UserRole.DELIVERY_PARTNER
+                User.role == "DELIVERY_PARTNER"
             ).first()
             
             if not partner:
-                session.close()
                 return JsonResponse({"error": "Delivery partner not found"}, status=404)
-
-            session.close()
 
             return JsonResponse({
                 "partner_id": partner.id,
@@ -376,10 +374,11 @@ class DeliveryPartnerAvailabilityController(View):
                 "current_deliveries": partner.total_deliveries,
                 "rating": partner.rating
             })
-
         except Exception as e:
             logger.exception(e)
             return JsonResponse({"error": "Internal server error"}, status=500)
+        finally:
+            session.close()
 
 
 # =====================================================
@@ -393,34 +392,30 @@ class DeliveryPartnerEarningsController(View):
     """
 
     def get(self, request, partner_id):
+        session = get_database_session()
         try:
-            session = SessionLocal()
-
             partner = session.query(User).filter(
                 User.id == partner_id,
-                User.role == UserRole.DELIVERY_PARTNER
+                User.role == "DELIVERY_PARTNER"
             ).first()
             
             if not partner:
-                session.close()
                 return JsonResponse({"error": "Delivery partner not found"}, status=404)
 
             # Get completed deliveries for this partner
             completed_deliveries = session.query(Delivery).filter(
                 Delivery.delivery_partner_id == partner_id,
-                Delivery.status == DeliveryStatus.DELIVERED
+                Delivery.status == "DELIVERED"
             ).all()
 
             total_earnings = sum(float(d.delivery_fee) if d.delivery_fee else 0 for d in completed_deliveries)
             total_tips = sum(float(d.tip) if d.tip else 0 for d in completed_deliveries)
             
             # This month's earnings
-            current_month = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            current_month = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
             this_month_deliveries = [d for d in completed_deliveries if d.delivery_time and d.delivery_time >= current_month]
             this_month_earnings = sum(float(d.delivery_fee) if d.delivery_fee else 0 for d in this_month_deliveries)
             this_month_tips = sum(float(d.tip) if d.tip else 0 for d in this_month_deliveries)
-
-            session.close()
 
             return JsonResponse({
                 "partner_info": {
@@ -440,7 +435,8 @@ class DeliveryPartnerEarningsController(View):
                     "this_month_deliveries": len(this_month_deliveries)
                 }
             })
-
         except Exception as e:
             logger.exception(e)
             return JsonResponse({"error": "Internal server error"}, status=500)
+        finally:
+            session.close()

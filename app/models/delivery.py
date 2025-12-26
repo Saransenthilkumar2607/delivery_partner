@@ -1,40 +1,38 @@
-from sqlalchemy import Column, String, Text, Integer, Float, Enum, DateTime, ForeignKey, Numeric
-from sqlalchemy.orm import relationship
-
-from app.helpers.base_model import BaseModel
+from django.db import models
 from app.helpers.enums import DeliveryStatus
 
-class Delivery(BaseModel):
-    __tablename__ = "deliveries"
-    
+class Delivery(models.Model):
     # Basic Information
-    tracking_number = Column(String(50), unique=True, index=True, nullable=False)
-    end_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    delivery_partner_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    tracking_number = models.CharField(max_length=50, unique=True)
+    end_user_id = models.IntegerField(blank=True, null=True)
+    delivery_partner_id = models.IntegerField(blank=True, null=True)
     
     # Delivery Details
-    pickup_address = Column(Text, nullable=False)
-    delivery_address = Column(Text, nullable=False)
-    item_description = Column(Text, nullable=False)
+    pickup_address = models.TextField()
+    delivery_address = models.TextField()
+    item_description = models.TextField()
     
     # Status and Tracking
-    status = Column(String(20), default=DeliveryStatus.PENDING)
+    status = models.CharField(max_length=20, default=DeliveryStatus.PENDING)
     
     # Timing
-    pickup_time = Column(DateTime(timezone=True), nullable=True)
-    delivery_time = Column(DateTime(timezone=True), nullable=True)
+    pickup_time = models.DateTimeField(blank=True, null=True)
+    delivery_time = models.DateTimeField(blank=True, null=True)
     
     # Pricing
-    delivery_fee = Column(Numeric(10, 2), nullable=True)
-    tip = Column(Numeric(10, 2), default=0)
+    delivery_fee = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
+    tip = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     
-    # Notes
-    pickup_notes = Column(Text, nullable=True)
-    delivery_notes = Column(Text, nullable=True)
+    # Additional Notes
+    pickup_notes = models.TextField(blank=True, null=True)
+    delivery_notes = models.TextField(blank=True, null=True)
     
-    # Relationships
-    end_user = relationship("User", foreign_keys=[end_user_id], backref="user_deliveries")
-    delivery_partner = relationship("User", foreign_keys=[delivery_partner_id], backref="partner_deliveries")
-    
-    def __repr__(self):
-        return f"Delivery {self.tracking_number} - {self.status.value}"
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'deliveries'
+
+    def __str__(self):
+        return f"{self.tracking_number} - {self.status}"
+        return f"Delivery {self.tracking_number} - {self.status}"

@@ -10,6 +10,106 @@ logger = logging.getLogger(__name__)
 class EmailService:
     
     @staticmethod
+    def send_welcome_email_to_user(user_details):
+        """
+        Send welcome email to newly created user
+        """
+        logger.info(f"Email service received user_details: {user_details}")
+        try:
+            subject = f"Welcome to Delivery Partner System - {user_details.get('name', 'User')}"
+            
+            message = f"""
+Dear {user_details.get('name', 'User')},
+
+Welcome to the Delivery Partner System! Your account has been successfully created.
+
+Account Details:
+- Name: {user_details.get('name', 'N/A')}
+- Email: {user_details.get('email', 'N/A')}
+- Role: {user_details.get('role', 'N/A')}
+- Created At: {user_details.get('created_at', 'N/A')}
+
+You can now log in to your account and start using our services.
+
+If you have any questions or need assistance, please contact our support team.
+
+Best regards,
+Delivery Partner System
+            """
+            
+            from_email = settings.DEFAULT_FROM_EMAIL
+            recipient_email = user_details.get('email')
+            
+            # Skip sending email if email is empty, None, or just whitespace
+            if not recipient_email or not recipient_email.strip():
+                logger.warning(f"Cannot send welcome email: no valid email address provided for user {user_details.get('name', 'Unknown')}. Email value: '{recipient_email}'")
+                return
+            
+            recipient_list = [recipient_email.strip()]
+            
+            logger.info(f"About to call send_mail. From: {from_email}, To: {recipient_list}, Subject: {subject}")
+            send_mail(
+                subject=subject,
+                message=message,
+                from_email=from_email,
+                recipient_list=recipient_list,
+                fail_silently=False,
+            )
+            
+            logger.info(f"Welcome email sent to user {user_details.get('email')}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to send welcome email to user: {str(e)}")
+            return False
+    
+    @staticmethod
+    def send_partner_verification_email(partner_details):
+        """
+        Send email to delivery partner when verification status changes
+        """
+        try:
+            status = "verified" if partner_details.get('is_verified') else "unverified"
+            subject = f"Delivery Partner Account {status.title()} - {partner_details.get('name', 'Partner')}"
+            
+            message = f"""
+Dear {partner_details.get('name', 'Delivery Partner')},
+
+Your delivery partner account has been {status}.
+
+Account Details:
+- Name: {partner_details.get('name', 'N/A')}
+- Email: {partner_details.get('email', 'N/A')}
+- Status: {status.title()}
+- Updated At: {partner_details.get('updated_at', 'N/A')}
+
+{"You can now start accepting deliveries." if partner_details.get('is_verified') else "Please complete your verification process to start accepting deliveries."}
+
+If you have any questions or need assistance, please contact our support team.
+
+Best regards,
+Delivery Partner System
+            """
+            
+            from_email = settings.DEFAULT_FROM_EMAIL
+            recipient_list = [partner_details.get('email')]
+            
+            send_mail(
+                subject=subject,
+                message=message,
+                from_email=from_email,
+                recipient_list=recipient_list,
+                fail_silently=False,
+            )
+            
+            logger.info(f"Verification email sent to partner {partner_details.get('email')} - status: {status}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to send verification email to partner: {str(e)}")
+            return False
+    
+    @staticmethod
     def send_order_created_to_admin(delivery_details):
         """
         Send email to admin when end user creates a new order
